@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: pano-processing-api
+    env: docker
+    plan: free # Can be updated to starter, standard, etc.
+    region: ohio
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
