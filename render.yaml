@@ -1,11 +1,12 @@
 services:
   - type: web
-    name: pano-processing-api
-    env: docker
-    plan: free # Can be updated to starter, standard, etc.
-    region: ohio
+    name: pano-tour-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: SUPABASE_URL
+      - key: GROQ_API_KEY
         sync: false
-      - key: SUPABASE_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false

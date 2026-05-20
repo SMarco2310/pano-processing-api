@@ -1,73 +1,128 @@
-# Pannellum Processing Microservice 📸
+# Automated Room Tour API (equirectangular)
 
-This is a standalone Python microservice built with **FastAPI**. It is designed to take high-resolution 360° equirectangular images, process them into multi-resolution image tiles (using the official Pannellum `generate.py` utility), inject navigation hotspots, and seamlessly upload the output directly to a **Supabase Storage** bucket.
+A tiny FastAPI service that turns N uploaded 360 panoramas into a fully-linked Pannellum tour config, with **AI-driven room classification and door detection**. No tiling, no `hugin-tools`, no storage layer.
 
-By decoupling this heavy image-processing task from your main Node.js backend, your primary API remains fast, responsive, and easy to scale.
+## How it works
 
-## 🚀 How it Works
+1. Your app uploads equirectangular .jpgs to your own storage (Convex, R2, S3, etc.) and gets public URLs.
+2. You `POST` those URLs to this API along with a `tour_id`.
+3. For each image, the service:
+   - downloads it to a temp directory,
+   - uses **Groq** (free) or **Claude** vision to identify the room type (when you don't provide a label),
+   - uses the same vision model to detect walkable doors / openings and converts pixel positions to Pannellum pitch/yaw,
+   - deletes the temp copy.
+4. Returns a fully-assembled multi-scene `tour_config` JSON with scenes linked through the detected doors.
+5. Your app persists the returned `tour_config` wherever it likes (Convex storage, a DB field, etc.).
 
-1. **Upload Request**: Your frontend or main API sends a `POST` request to this service containing a 360° image file, a `room_id`, and optional `hotspots`.
-2. **Tile Generation**: The microservice saves the image temporarily and executes the `generate.py` script. This script (powered by the OS tool `nona` from `hugin-tools`) chops the large panoramic image into a pyramid of smaller, optimized image "tiles".
-3. **Hotspot Injection**: It automatically injects the navigation hotspots you provided into the resulting `config.json` configuration file.
-4. **Cloud Sync**: Using the Supabase Python SDK, it uploads the entire nested folder of newly generated tiles (and the config) directly to your `panoramas` Supabase bucket.
-5. **Response**: It immediately deletes the temporary local files to free up space and returns the public `tour_url` pointing to your new `config.json`, which your frontend Pannellum instance can instantly load!
+**This service is stateless.** It never stores your images, your tour configs, or anything else. The temp files only exist during the few seconds of one request.
 
-## 📸 Optimal Panorama Image Rules
-For the clearest virtual tours, images sent to this API should follow these specs:
-- **Aspect Ratio**: MUST be exactly `2:1` (Width is exactly twice the Height).
-- **Resolution**: `8192x4096 (8K)` or `4096x2048 (4K)` depending on desired quality vs processing speed. Anything below 4K will look blurry when zoomed in.
-- **Format**: Equirectangular projection, JPEG or PNG.
+## API
 
-## 💻 Local Development Setup
+### `POST /api/panorama/tour/auto`
 
-To test this locally on your machine:
-**(Note: You must have Hugin installed on your PC so the script can access `nona`)**
-
-1. Create a virtual environment and install the dependencies:
-   ```bash
-   python -m venv venv
-   # Windows
-   .\venv\Scripts\activate
-   # Mac/Linux
-   source venv/bin/activate
-
-   pip install -r requirements.txt
-   ```
-2. Create a `.env` file in the root directory:
-   ```env
-   SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_KEY=your-supabase-service-role-key
-   ```
-3. Start the FastAPI server:
-   ```bash
-   uvicorn main:app --reload
-   ```
-
-## 🌐 API Reference
-
-### `POST /api/panorama/tour`
-Accepts `multipart/form-data`.
-
-**Parameters**:
-- `room_id` (string, required): A unique identifier for the room. Used to structure the folder in Supabase.
-- `image` (file, required): The 360° equirectangular photo.
-- `hotspots` (string, optional): A JSON stringified array of hotspot objects to inject into the config.
-
-**Success Response**:
+**Request body** (JSON):
 ```json
 {
-  "status": "success",
-  "room_id": "lobby123",
-  "tour_url": "https://your-project.supabase.co/storage/v1/object/public/panoramas/lobby123/config.json"
+  "tour_id": "room_42",
+  "vision_provider": "groq",
+  "scenes": [
+    {
+      "image_url": "https://your-convex.../main.jpg",
+      "filename": "main.jpg",
+      "label": "main_room",
+      "title": "Main Room"
+    },
+    {
+      "image_url": "https://your-convex.../bath.jpg"
+    }
+  ]
 }
 ```
 
-## 🐳 Deployment to Render
+- `tour_id` (required): an opaque id you control, echoed back in the response.
+- `scenes[].image_url` (required): a public URL the service can `GET`.
+- `scenes[].label` / `scenes[].title` (optional): provide them to skip AI classification for that scene.
+- `vision_provider` (optional, default `"groq"`): `"groq"` is free; `"claude"` is more accurate at door localization.
 
-Because `generate.py` relies on the OS-level `hugin-tools` dependency, standard basic Python environments will fail. This project **requires Docker** to deploy so it can install `hugin-tools` flawlessly on a clean Linux container.
+**Response**:
+```json
+{
+  "status": "success",
+  "tour_id": "room_42",
+  "vision_provider": "groq",
+  "tour_config": {
+    "default": { "firstScene": "main_room", "sceneFadeDuration": 1000 },
+    "scenes": {
+      "main_room": {
+        "type": "equirectangular",
+        "panorama": "https://your-convex.../main.jpg",
+        "title": "Main Room",
+        "hfov": 100,
+        "hotSpots": [
+          { "type": "scene", "pitch": -5, "yaw": 117, "text": "Go to Bathroom", "sceneId": "bathroom" }
+        ]
+      },
+      "bathroom": { ... }
+    }
+  },
+  "scenes": [
+    { "id": "main_room", "title": "Main Room", "filename": "main.jpg", "image_url": "...", "doors_detected": 1 },
+    { "id": "bathroom",  "title": "Bathroom",  "filename": "bath.jpg", "image_url": "...", "doors_detected": 1 }
+  ]
+}
+```
 
-1. **Push to GitHub**: Commit this entire folder (including the provided `Dockerfile` and `render.yaml`).
-2. **Go to Render**: In your dashboard, click **New > Blueprint**.
-3. **Connect Repo**: Select this repository. Render will instantly read the `render.yaml` file.
-4. **Environment Variables**: Fill out your Supabase URL and Key when prompted in the Render UI.
-5. **Deploy**: Render will build the Docker container and start serving the API!
+Feed `tour_config` straight into Pannellum:
+
+```js
+pannellum.viewer('viewer', { config: tour_config });
+```
+
+### `GET /health`
+Returns `{"status": "ok"}`.
+
+## Environment variables
+
+| Variable            | Required for      | Notes                                                  |
+| ------------------- | ----------------- | ------------------------------------------------------ |
+| `GROQ_API_KEY`      | `vision_provider="groq"`  | Free at console.groq.com — generous free tier         |
+| `ANTHROPIC_API_KEY` | `vision_provider="claude"` | Paid; ~$0.003 per scene for door detection             |
+
+You only need the key(s) for the provider(s) you actually use.
+
+## Local development
+
+```bash
+python -m venv venv
+source venv/bin/activate   # Windows: .\venv\Scripts\activate
+pip install -r requirements.txt
+
+cp .env.example .env       # then fill in keys
+uvicorn main:app --reload
+```
+
+## Deployment
+
+No Docker, no system packages. Any Python 3.10+ host works — Render, Railway, Fly, Vercel (with the Python runtime), Cloud Run, a $5 VPS.
+
+A minimal Render config:
+```yaml
+services:
+  - type: web
+    name: pano-tour-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+```
+
+## Notes on accuracy
+
+- **Room classification**: Groq's Llama 4 Scout is very reliable here. Claude is marginally better but not worth the cost for this step.
+- **Door detection**: this is the harder task. Llama models will occasionally flag a window, mirror, or large painting as a door, and the bottom-center coordinates may be a few degrees off. If a particular tour matters, send it again with `vision_provider: "claude"` for a cleaner pass.
+- The service falls through gracefully if AI fails: classification falls back to `"scene"`/`"Scene"`, door detection falls back to an empty list (and each scene gets one fallback hotspot at the horizon).
