@@ -2,7 +2,32 @@
 
 A tiny FastAPI service that turns N uploaded 360 panoramas into a fully-linked Pannellum tour config, with **AI-driven room classification and door detection**. No tiling, no `hugin-tools`, no storage layer.
 
-## How it works
+---
+
+## Two versions of this service
+
+This repo has two parallel implementations on separate branches. Pick the one that matches your needs.
+
+| | **Equirectangular** *(this branch)* | **Tiling / multires** *([`claude/automate-room-tour-system-jJhkK`](https://github.com/SMarco2310/pano-processing-api/tree/claude/automate-room-tour-system-jJhkK))* |
+|---|---|---|
+| **Pannellum mode** | `equirectangular` — one .jpg per scene | `multires` — pyramid of small tiles per scene |
+| **Files per scene in storage** | 1 (the original .jpg) | 30–100+ tile files + a config.json |
+| **Browser load** | Downloads the whole .jpg upfront | Lazy-loads only tiles in view, low-res fallback shows instantly |
+| **Best for** | Up to 4K, normal connections, small tours | 8K+ images, slow connections, gallery-grade tours |
+| **Input** | JSON with public image URLs | Multipart upload of raw image files |
+| **Output** | Returns `tour_config` JSON inline (you persist it) | Uploads tiles + config to Supabase, returns `tour_url` |
+| **Storage owner** | The caller (Convex / R2 / wherever you put the images) | The service (Supabase bucket `panoramas`) |
+| **Vision provider** | Groq (free) by default, Claude opt-in | Claude only |
+| **AI cost per tour** | $0 with Groq, ~$0.015 with Claude | ~$0.015 |
+| **System dependencies** | None — plain Python 3.10+ | `hugin-tools` + Docker |
+| **Deploy targets** | Any Python host (Render free, Railway, Fly, Vercel) | Render with Docker (free tier works) |
+| **Stateful?** | No — stateless request/response | Yes — writes to Supabase |
+
+**Default recommendation for CampusNest-style apps:** equirectangular (this branch). The tiling branch is there if you decide you need 8K+ source images or want to optimize bandwidth for users on bad connections.
+
+---
+
+## How this (equirectangular) version works
 
 1. Your app uploads equirectangular .jpgs to your own storage (Convex, R2, S3, etc.) and gets public URLs.
 2. You `POST` those URLs to this API along with a `tour_id`.
