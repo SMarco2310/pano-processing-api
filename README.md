@@ -7,7 +7,34 @@ It offers two flows:
 1. **Single-scene** (`/api/panorama/tour`): you supply one image + (optional) hotspots, you get one Pannellum config back.
 2. **Automated multi-scene** (`/api/panorama/tour/auto`): you supply N images, the service uses Claude vision to identify each room and detect walkable doorways, then builds and uploads a fully-linked multi-scene `tour_config.json`.
 
-## How it works (automated flow)
+---
+
+## Two versions of this service
+
+This repo has two parallel implementations on separate branches. Pick the one that matches your needs.
+
+| | **Tiling / multires** *(this branch)* | **Equirectangular** *([`claude/equirectangular-tour-system-jJhkK`](https://github.com/SMarco2310/pano-processing-api/tree/claude/equirectangular-tour-system-jJhkK))* |
+|---|---|---|
+| **Pannellum mode** | `multires` — pyramid of small tiles per scene | `equirectangular` — one .jpg per scene |
+| **Files per scene in storage** | 30–100+ tile files + a config.json | 1 (the original .jpg) |
+| **Browser load** | Lazy-loads only tiles in view, low-res fallback shows instantly | Downloads the whole .jpg upfront |
+| **Best for** | 8K+ images, slow connections, gallery-grade tours | Up to 4K, normal connections, small tours |
+| **Input** | Multipart upload of raw image files | JSON with public image URLs |
+| **Output** | Uploads tiles + config to Supabase, returns `tour_url` | Returns `tour_config` JSON inline (you persist it) |
+| **Storage owner** | The service (Supabase bucket `panoramas`) | The caller (Convex / R2 / wherever you put the images) |
+| **Vision provider** | Claude only | Groq (free) by default, Claude opt-in |
+| **AI cost per tour** | ~$0.015 | $0 with Groq, ~$0.015 with Claude |
+| **System dependencies** | `hugin-tools` + Docker | None — plain Python 3.10+ |
+| **Deploy targets** | Render with Docker (free tier works) | Any Python host (Render free, Railway, Fly, Vercel) |
+| **Stateful?** | Yes — writes to Supabase | No — stateless request/response |
+
+**When to pick this (tiling) branch:** you have 8K+ source images, your users are on slow connections, or you specifically want progressive loading with an instant low-res preview before the full image streams in.
+
+**When to pick the equirectangular branch:** you have 4K-ish images, you're already storing images in Convex/R2/S3 and want to keep them there, you don't want a Supabase dependency, or you want the simpler stateless API.
+
+---
+
+## How it works (automated flow, tiling)
 
 1. **Upload**: your frontend or main API sends a multipart `POST` with a `tour_id` and one or more equirectangular images.
 2. **Scene identification**: for each image, the service uses any `scene_metadata` you provided; missing labels are auto-classified by Claude vision (room type -> snake_case label + title).
