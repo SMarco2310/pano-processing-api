@@ -19,8 +19,8 @@ This repo has two parallel implementations on separate branches. Pick the one th
 | **Storage owner** | The caller (Convex / R2 / wherever you put the images) | The service (Supabase bucket `panoramas`) |
 | **Vision provider** | Groq (free) by default, Claude opt-in | Claude only |
 | **AI cost per tour** | $0 with Groq, ~$0.015 with Claude | ~$0.015 |
-| **System dependencies** | None — plain Python 3.10+ | `hugin-tools` + Docker |
-| **Deploy targets** | Any Python host (Render free, Railway, Fly, Vercel) | Render with Docker (free tier works) |
+| **System dependencies** | None — plain Python 3.10+ | `hugin-tools` |
+| **Deploy targets** | Any Python host, or Docker | Render with Docker (free tier works) |
 | **Stateful?** | No — stateless request/response | Yes — writes to Supabase |
 
 **Default recommendation for CampusNest-style apps:** equirectangular (this branch). The tiling branch is there if you decide you need 8K+ source images or want to optimize bandwidth for users on bad connections.
@@ -117,6 +117,8 @@ You only need the key(s) for the provider(s) you actually use.
 
 ## Local development
 
+### Plain Python
+
 ```bash
 python -m venv venv
 source venv/bin/activate   # Windows: .\venv\Scripts\activate
@@ -126,11 +128,23 @@ cp .env.example .env       # then fill in keys
 uvicorn main:app --reload
 ```
 
+### Docker
+
+```bash
+docker build -t pano-tour-api .
+docker run -p 10000:10000 --env-file .env pano-tour-api
+```
+
+The API is then available at `http://localhost:10000`.
+
 ## Deployment
 
-No Docker, no system packages. Any Python 3.10+ host works — Render, Railway, Fly, Vercel (with the Python runtime), Cloud Run, a $5 VPS.
+This branch has no OS-level dependencies, so you have two deployment paths.
 
-A minimal Render config:
+### Plain Python runtime (lightest)
+
+Any Python 3.10+ host works — Render, Railway, Fly, Vercel (Python runtime), Cloud Run, a $5 VPS. The provided `render.yaml` uses this path:
+
 ```yaml
 services:
   - type: web
@@ -139,6 +153,25 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+```
+
+### Docker (matches the tiling branch's deploy story)
+
+The included `Dockerfile` is a minimal `python:3.11-slim` image. Useful if you want one consistent deploy pipeline for both branches, or are deploying somewhere that requires a container (Cloud Run, ECS, Kubernetes, Fly Machines).
+
+To deploy this branch on Render via Docker instead of the Python runtime, swap `render.yaml` to:
+
+```yaml
+services:
+  - type: web
+    name: pano-tour-api
+    env: docker
+    plan: free
     envVars:
       - key: GROQ_API_KEY
         sync: false
