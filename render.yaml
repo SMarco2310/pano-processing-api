@@ -10,3 +10,7 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: CONVEX_STORAGE_URL
+        sync: false
+      - key: CONVEX_STORAGE_TOKEN
+        sync: false

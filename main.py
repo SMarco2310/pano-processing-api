@@ -10,6 +10,7 @@ import httpx
 
 from ai import classify_scene, detect_doors, VisionProvider
 from tour_builder import slugify, build_tour_config
+import convex_storage
 
 app = FastAPI(title="Automated Room Tour API (equirectangular)")
 
@@ -33,6 +34,14 @@ class TourRequest(BaseModel):
     tour_id: str
     scenes: List[SceneInput]
     vision_provider: Optional[str] = Field("groq", description="'groq' (default, free) or 'claude' (more accurate)")
+    upload_to_convex: Optional[bool] = Field(
+        None,
+        description=(
+            "If true, upload the resulting tour_config to Convex storage and return its URL. "
+            "Defaults to true when CONVEX_STORAGE_URL is configured, false otherwise. "
+            "Set explicitly to override the default."
+        ),
+    )
 
 
 @app.post("/api/panorama/tour/auto")
@@ -43,9 +52,9 @@ async def generate_tour_auto(req: TourRequest):
     Input: tour_id + array of scenes (each with image_url, optional label/title).
     Output: tour_config object ready to feed to Pannellum + per-scene metadata.
 
-    This endpoint is stateless: it does NOT store anything. The caller (e.g. the
-    CampusNest Convex backend) is responsible for persisting the returned
-    tour_config wherever they want (Convex storage, a database column, etc.).
+    When CONVEX_STORAGE_URL is configured (and upload_to_convex is not explicitly
+    false), the assembled tour_config is also uploaded to Convex storage via the
+    customer's HTTP action; the resulting public URL is returned as tour_url.
     """
     if not req.scenes:
         raise HTTPException(status_code=400, detail="At least one scene is required")
@@ -117,7 +126,7 @@ async def generate_tour_auto(req: TourRequest):
 
         tour_config = build_tour_config(scenes_meta)
 
-        return {
+        response = {
             "status": "success",
             "tour_id": req.tour_id,
             "vision_provider": provider.value,
@@ -133,6 +142,23 @@ async def generate_tour_auto(req: TourRequest):
                 for s in scenes_meta
             ],
         }
+
+        # Optionally persist the tour_config to Convex storage.
+        should_upload = req.upload_to_convex if req.upload_to_convex is not None else convex_storage.is_configured()
+        if should_upload:
+            if not convex_storage.is_configured():
+                raise HTTPException(
+                    status_code=500,
+                    detail="upload_to_convex=true but CONVEX_STORAGE_URL is not configured on the server",
+                )
+            try:
+                upload = await convex_storage.upload_tour_config(tour_config, req.tour_id)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Convex storage upload failed: {e}")
+            response["tour_url"] = upload["url"]
+            response["storage_id"] = upload["storage_id"]
+
+        return response
     except HTTPException:
         raise
     except Exception as e:
