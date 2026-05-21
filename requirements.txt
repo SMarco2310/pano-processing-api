@@ -3,3 +3,5 @@ uvicorn
 python-multipart
 supabase
 pillow
+python-dotenv
+anthropic
